@@ -695,11 +695,13 @@ function node_invoke_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL) {
  *   Which numbered revision to load. Defaults to the current version.
  * @param $reset
  *   Whether to reset the internal node_load cache.
+ * @param $slavesafe
+ *   Whether to use the slave db for node_load. Defaults to using slave db.
  *
  * @return
  *   A fully-populated node object.
  */
-function node_load($param = array(), $revision = NULL, $reset = NULL) {
+function node_load($param = array(), $revision = NULL, $reset = NULL, $slavesafe = TRUE) {
   static $nodes = array();
 
   if ($reset) {
@@ -744,14 +746,30 @@ function node_load($param = array(), $revision = NULL, $reset = NULL) {
   // Change name of revision uid so it doesn't conflict with n.uid.
   $fields = str_replace('r.uid', 'r.uid AS revision_uid', $fields);
 
-  // Retrieve the node.
-  // No db_rewrite_sql is applied so as to get complete indexing for search.
-  if ($revision) {
-    array_unshift($arguments, $revision);
-    $node = db_fetch_object(db_query_slave('SELECT '. $fields .' FROM {node} n INNER JOIN {users} u ON u.uid = n.uid INNER JOIN {node_revisions} r ON r.nid = n.nid AND r.vid = %d WHERE '. $cond, $arguments));
+  // By default use slave db for node_loads.
+  if ($slavesafe) {
+    // Retrieve the node.
+    // No db_rewrite_sql is applied so as to get complete indexing for search.
+    if ($revision) {
+      array_unshift($arguments, $revision);
+      $node = db_fetch_object(db_query_slave('SELECT '. $fields .' FROM {node} n INNER JOIN {users} u ON u.uid = n.uid INNER JOIN {node_revisions} r ON r.nid = n.nid AND r.vid = %d WHERE '. $cond, $arguments));
+    }
+    else {
+      $node = db_fetch_object(db_query_slave('SELECT '. $fields .' FROM {node} n INNER JOIN {users} u ON u.uid = n.uid INNER JOIN {node_revisions} r ON r.vid = n.vid WHERE '. $cond, $arguments));
+    }
   }
+  // Force node loads from the master. Not the most efficient, but in use. 
+  // See http://buytaert.net/database-replication-lag.
   else {
-    $node = db_fetch_object(db_query_slave('SELECT '. $fields .' FROM {node} n INNER JOIN {users} u ON u.uid = n.uid INNER JOIN {node_revisions} r ON r.vid = n.vid WHERE '. $cond, $arguments));
+    // Retrieve the node.
+    // No db_rewrite_sql is applied so as to get complete indexing for search.
+    if ($revision) {
+      array_unshift($arguments, $revision);
+      $node = db_fetch_object(db_query('SELECT '. $fields .' FROM {node} n INNER JOIN {users} u ON u.uid = n.uid INNER JOIN {node_revisions} r ON r.nid = n.nid AND r.vid = %d WHERE '. $cond, $arguments));
+    }
+    else {
+      $node = db_fetch_object(db_query('SELECT '. $fields .' FROM {node} n INNER JOIN {users} u ON u.uid = n.uid INNER JOIN {node_revisions} r ON r.vid = n.vid WHERE '. $cond, $arguments));
+    }
   }
 
   if ($node && $node->nid) {
@@ -775,6 +793,7 @@ function node_load($param = array(), $revision = NULL, $reset = NULL) {
 
   return $node;
 }
+
 
 /**
  * Perform validation checks on the given node.
